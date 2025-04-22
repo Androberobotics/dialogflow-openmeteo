@@ -3,8 +3,11 @@ const axios = require("axios");
 const app = express();
 app.use(express.json());
 
-const LAT = 59.91; // Oslo
-const LON = 10.75;
+const fallbackLocation = {
+  name: "Oslo",
+  lat: 59.91,
+  lon: 10.75
+};
 
 const weatherDescriptions = {
   0: "☀️ Klart",
@@ -26,25 +29,40 @@ const weatherDescriptions = {
   95: "⛈️ Tordenvær"
 };
 
+async function getCoordinates(place) {
+  try {
+    const response = await axios.get(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(place)}&count=1`);
+    const result = response.data.results?.[0];
+    if (!result) return fallbackLocation;
+    return { name: result.name, lat: result.latitude, lon: result.longitude };
+  } catch (err) {
+    console.error("Geokoding feilet:", err.message);
+    return fallbackLocation;
+  }
+}
+
 app.post("/webhook", async (req, res) => {
-  const endpoint = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&current_weather=true`;
+  const location = req.body.queryResult?.parameters?.location;
+  const place = typeof location === "string" ? location : location?.city || location?.country || fallbackLocation.name;
+
+  const { name, lat, lon } = await getCoordinates(place);
 
   try {
-    const response = await axios.get(endpoint);
+    const response = await axios.get(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
     const weather = response.data.current_weather;
-
     const code = weather.weathercode;
     const description = weatherDescriptions[code] || "🌈 Ukjent vær";
 
-    const message = `${description}\n🌡️ Temperatur: ${weather.temperature} °C\n💨 Vind: ${weather.windspeed} m/s\n🕒 Tid: ${weather.time}`;
-
+    const message = `📍 ${name}\n${description}\n🌡️ ${weather.temperature} °C\n💨 ${weather.windspeed} m/s\n🕒 ${weather.time}`;
     return res.json({ fulfillmentText: message });
+
   } catch (err) {
-    return res.json({ fulfillmentText: "Feil ved henting av værdata ❌" });
+    console.error("Feil ved henting av vær:", err.message);
+    return res.json({ fulfillmentText: "Beklager, jeg klarte ikke hente værdata akkurat nå ❌" });
   }
 });
 
-app.get("/", (req, res) => res.send("Open-Meteo webhook fungerer!"));
+app.get("/", (req, res) => res.send("Værboten kjører!"));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server kjører på port ${port}`));
